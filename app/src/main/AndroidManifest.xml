@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest package="br.com.carlosrafaelgn.iotcontroller"
+<manifest package="br.com.carlosrafaelgn.iotdcp"
           xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
