@@ -55,8 +55,8 @@ import java.util.HashMap;
 public final class IoTClient {
 	// 2570 = 0x0A0A (at the present date it is not assigned to any services)
 	private static final int IoTPort = 2570;
-	private static final int DefaultMaximumAttempts = 3;
-	private static final int DefaultTimeoutBeforeNextAttempt = 2500; //999000; //2500;
+	private static final int DefaultMaximumAttempts = 5;
+	private static final int DefaultTimeoutBeforeNextAttempt = 500;
 	private static final int DefaultReceiveBufferSize = 100 * IoTMessage.MaxPayloadLengthEscaped;
 
 	@Target({ElementType.METHOD, ElementType.CONSTRUCTOR})
@@ -86,6 +86,7 @@ public final class IoTClient {
 	private final int maximumAttempts, timeoutBeforeNextAttempt;
 	private Application context;
 	private volatile boolean alive;
+	private boolean scanningDevices;
 	private DatagramSocket socket;
 	private Thread clientThread, senderThread;
 	private Looper senderThreadLooper;
@@ -219,6 +220,8 @@ public final class IoTClient {
 				observer.onMessageSent(this, (IoTDevice)msg.obj, msg.arg1);
 			break;
 		case IoTMessage.MessageQueryDevice:
+			if (msg.obj == null)
+				scanningDevices = false;
 			if (observer != null && ((msg.obj instanceof IoTDevice) || msg.obj == null))
 				observer.onQueryDevice(this, (IoTDevice)msg.obj);
 			break;
@@ -548,7 +551,7 @@ public final class IoTClient {
 		Looper.loop();
 	}
 
-	@IoTClient.SecondaryThread
+	@SecondaryThread
 	private void doSendMessage_(IoTSentMessage sentMessage, boolean notifyObserver) {
 		if (sentMessage.device == null ||
 			sentMessage.device.canSendMessageNow_(sentMessageCache, sentMessage)) {
@@ -571,8 +574,12 @@ public final class IoTClient {
 		return true;
 	}
 
+	public boolean isScanningDevices() {
+		return scanningDevices;
+	}
+
 	public boolean scanDevices() {
-		return sendMessage(sentMessageCache.queryDevice(getBroadcastAddress()));
+		return (!scanningDevices && (scanningDevices = sendMessage(sentMessageCache.queryDevice(getBroadcastAddress()))));
 	}
 
 	@SecondaryThread

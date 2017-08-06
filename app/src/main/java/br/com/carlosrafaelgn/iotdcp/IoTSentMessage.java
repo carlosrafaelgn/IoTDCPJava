@@ -66,6 +66,7 @@ final class IoTSentMessage {
 			sentMessage.payload0 = payload0;
 			sentMessage.payload1 = payload1;
 			sentMessage.value = value;
+			sentMessage.attempts = 0;
 			switch (clientId) {
 			case IoTMessage.ClientIdDescribeInterface:
 				sentMessage.hash0 = payload0;
