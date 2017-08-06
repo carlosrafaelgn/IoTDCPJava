@@ -232,7 +232,7 @@ public final class IoTProperty {
 
 	@IoTClient.SecondaryThread
 	boolean isReadableEnum8_() {
-		return (mode != IoTProperty.ModeWriteOnly &&
+		return (mode != ModeWriteOnly &&
 			dataType == DataTypeU8 &&
 			elementCount == 1 &&
 			unitNum == UnitEnum);
@@ -423,7 +423,7 @@ public final class IoTProperty {
 	public Enum getValueEnum() {
 		if (enumsByValue == null)
 			return null;
-		final byte[] buffer = value.buffer;
+		final byte[] buffer = this.value.buffer;
 		final int value;
 		synchronized (this.value) {
 			switch (dataType) {
@@ -505,7 +505,7 @@ public final class IoTProperty {
 	public Enum getValueEnum(int elementIndex) {
 		if (enumsByValue == null)
 			return null;
-		final byte[] buffer = value.buffer;
+		final byte[] buffer = this.value.buffer;
 		final int value;
 		synchronized (this.value) {
 			switch (dataType) {
