@@ -110,6 +110,9 @@ public final class IoTDevice {
 						if (current.message == sentMessage.message &&
 							current.payload0 == sentMessage.payload0 &&
 							current.payload1 == sentMessage.payload1) {
+							// is this message already enqueued?
+							if (current == sentMessage)
+								return false;
 							// return this message to the cache, as it will no longer be used
 							cache.release_(current);
 							// remove this message from the queue

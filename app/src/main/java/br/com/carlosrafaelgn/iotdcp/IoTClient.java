@@ -554,6 +554,7 @@ public final class IoTClient {
 	@SecondaryThread
 	private void doSendMessage_(IoTSentMessage sentMessage, boolean notifyObserver) {
 		if (sentMessage.device == null ||
+			sentMessage.attempts > 0 || // messages being retried must not be sent to canSendMessageNow_()
 			sentMessage.device.canSendMessageNow_(sentMessageCache, sentMessage)) {
 			sentMessage.attempts++;
 			sentMessage.timestamp = (int)SystemClock.elapsedRealtime();
