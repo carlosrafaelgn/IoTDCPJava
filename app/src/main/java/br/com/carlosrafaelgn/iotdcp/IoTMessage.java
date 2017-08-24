@@ -241,21 +241,27 @@ public final class IoTMessage {
 		return new byte[RequestHeaderLength + MaxPasswordLengthEscaped + MaxPayloadLengthEscaped + EndOfPacketLength];
 	}
 
+	private static long deserializeLong(byte[] payload, int srcOffset) {
+		return ((long)((payload[srcOffset] & 0xFF) | ((payload[srcOffset + 1] & 0xFF) << 8) | ((payload[srcOffset + 2] & 0xFF) << 16) | (payload[srcOffset + 3] << 24)) & 0xFFFFFFFFL) |
+			((long)((payload[srcOffset + 4] & 0xFF) | ((payload[srcOffset + 5] & 0xFF) << 8) | ((payload[srcOffset + 6] & 0xFF) << 16) | (payload[srcOffset + 7] << 24)) << 32);
+	}
+
 	@IoTClient.SecondaryThread
 	IoTDevice parseQueryDevice_(IoTClient client, SocketAddress socketAddress) {
 		if (clientId != IoTMessage.ClientIdQueryDevice ||
-			responseCode != IoTMessage.ResponseOK)
+			responseCode != IoTMessage.ResponseOK ||
+			payloadLength < (1 + 16 + 16 + 1 + 1))
 			return null;
 
 		int srcOffset = 0;
 
 		final int flags = (payload[srcOffset++] & 0xFF);
 
-		final long leastSigBits = ((long)((payload[srcOffset++] & 0xFF) | ((payload[srcOffset++] & 0xFF) << 8) | ((payload[srcOffset++] & 0xFF) << 16) | (payload[srcOffset++] << 24)) & 0xFFFFFFFFL) |
-			((long)((payload[srcOffset++] & 0xFF) | ((payload[srcOffset++] & 0xFF) << 8) | ((payload[srcOffset++] & 0xFF) << 16) | (payload[srcOffset++] << 24)) << 32);
-
-		final long mostSigBits = ((long)((payload[srcOffset++] & 0xFF) | ((payload[srcOffset++] & 0xFF) << 8) | ((payload[srcOffset++] & 0xFF) << 16) | (payload[srcOffset++] << 24)) & 0xFFFFFFFFL) |
-			((long)((payload[srcOffset++] & 0xFF) | ((payload[srcOffset++] & 0xFF) << 8) | ((payload[srcOffset++] & 0xFF) << 16) | (payload[srcOffset++] << 24)) << 32);
+		final long leastSigBitsCategory = deserializeLong(payload, srcOffset);
+		final long mostSigBitsCategory = deserializeLong(payload, srcOffset + 8);
+		final long leastSigBits = deserializeLong(payload, srcOffset + 16);
+		final long mostSigBits = deserializeLong(payload, srcOffset + 24);
+		srcOffset += 32;
 
 		final int interfaceCount = (payload[srcOffset++] & 0xFF);
 		if (interfaceCount <= 0 || interfaceCount > 128)
@@ -263,11 +269,11 @@ public final class IoTMessage {
 		srcOffset += interfaceCount; // skip all interfaces for now
 
 		final int nameLen = (payload[srcOffset++] & 0xFF);
-		if ((nameLen + srcOffset) > payloadLength)
+		if (nameLen == 0 || (nameLen + srcOffset) > payloadLength)
 			return null;
 		final String name = new String(payload, srcOffset, nameLen);
 
-		return new IoTDevice(client, socketAddress, flags, new UUID(mostSigBits, leastSigBits), name, new IoTInterface[interfaceCount]);
+		return new IoTDevice(client, socketAddress, flags, new UUID(mostSigBitsCategory, leastSigBitsCategory), new UUID(mostSigBits, leastSigBits), name, new IoTInterface[interfaceCount]);
 	}
 
 	@IoTClient.SecondaryThread

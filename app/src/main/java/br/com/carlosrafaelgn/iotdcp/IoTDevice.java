@@ -39,7 +39,7 @@ public final class IoTDevice {
 	private static final int FlagEncryptionRequired = 0x08;
 
 	public final IoTClient client;
-	public final UUID uuid;
+	public final UUID categoryUuid, uuid;
 	public final String name;
 
 	private final int flags;
@@ -54,10 +54,11 @@ public final class IoTDevice {
 	private boolean hasPendingMessage;
 	private IoTSentMessage firstPendingMessage, lastPendingMessage;
 
-	public IoTDevice(IoTClient client, SocketAddress socketAddress, int flags, UUID uuid, String name, IoTInterface[] ioTInterfaces) {
+	public IoTDevice(IoTClient client, SocketAddress socketAddress, int flags, UUID categoryUuid, UUID uuid, String name, IoTInterface[] ioTInterfaces) {
 		this.client = client;
 		this.socketAddress = socketAddress;
 		this.flags = flags;
+		this.categoryUuid = categoryUuid;
 		this.uuid = uuid;
 		this.name = name;
 		this.ioTInterfaces = ioTInterfaces;
