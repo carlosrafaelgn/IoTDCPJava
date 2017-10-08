@@ -35,6 +35,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+@SuppressWarnings({"unused", "WeakerAccess"})
 public final class IoTProperty {
 	final static class Buffer {
 		final byte[] buffer;
@@ -360,9 +361,7 @@ public final class IoTProperty {
 	}
 
 	public boolean updateValue() {
-		if (mode == ModeWriteOnly)
-			return false;
-		return ioTInterface.device.client.getProperty(this);
+		return (mode != ModeWriteOnly && ioTInterface.device.client.getProperty(this));
 	}
 
 	// access to the value must be synchronized because it is read from a

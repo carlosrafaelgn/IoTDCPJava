@@ -29,7 +29,6 @@
 //
 package br.com.carlosrafaelgn.iotdcp;
 
-import android.app.Application;
 import android.content.Context;
 import android.net.DhcpInfo;
 import android.net.wifi.WifiManager;
@@ -52,12 +51,13 @@ import java.net.SocketTimeoutException;
 import java.util.Arrays;
 import java.util.HashMap;
 
+@SuppressWarnings({"unused", "WeakerAccess"})
 public final class IoTClient {
 	// 2570 = 0x0A0A (at the present date it is not assigned to any services)
 	private static final int IoTPort = 2570;
-	private static final int DefaultMaximumAttempts = 5;
-	private static final int DefaultTimeoutBeforeNextAttempt = 500;
-	private static final int DefaultReceiveBufferSize = 100 * IoTMessage.MaxPayloadLengthEscaped;
+	public static final int DefaultMaximumAttempts = 5;
+	public static final int DefaultTimeoutBeforeNextAttempt = 500;
+	public static final int DefaultReceiveBufferSize = 100 * IoTMessage.MaxPayloadLengthEscaped;
 
 	@Target({ElementType.METHOD, ElementType.CONSTRUCTOR})
 	@Retention(RetentionPolicy.SOURCE)
@@ -84,7 +84,7 @@ public final class IoTClient {
 	}
 
 	private final int maximumAttempts, timeoutBeforeNextAttempt;
-	private Application context;
+	private Context context;
 	private volatile boolean alive;
 	private boolean scanningDevices;
 	private DatagramSocket socket;
@@ -95,11 +95,11 @@ public final class IoTClient {
 	private final IoTSentMessage.Cache sentMessageCache;
 	private Observer observer;
 
-	public IoTClient(Application context) throws IOException {
+	public IoTClient(Context context) throws IOException {
 		this(context, DefaultMaximumAttempts, DefaultTimeoutBeforeNextAttempt, DefaultReceiveBufferSize);
 	}
 
-	public IoTClient(Application context, int maximumAttempts, int timeoutBeforeNextAttempt, int receiveBufferSize) throws IOException {
+	public IoTClient(Context context, int maximumAttempts, int timeoutBeforeNextAttempt, int receiveBufferSize) throws IOException {
 		if (maximumAttempts < 1 || maximumAttempts > 100)
 			throw new IllegalArgumentException("1 <= maximumAttempts <= 100");
 		if (timeoutBeforeNextAttempt < 500 || timeoutBeforeNextAttempt > 1200000)
@@ -149,7 +149,7 @@ public final class IoTClient {
 
 	private InetSocketAddress getBroadcastAddress() {
 		try {
-			final WifiManager wifi = (WifiManager)context.getSystemService(Context.WIFI_SERVICE);
+			final WifiManager wifi = (WifiManager)context.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
 			final DhcpInfo dhcp = wifi.getDhcpInfo();
 			final int broadcast = (dhcp.ipAddress & dhcp.netmask) | ~dhcp.netmask;
 			final byte[] quads = new byte[4];

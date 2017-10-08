@@ -32,6 +32,7 @@ package br.com.carlosrafaelgn.iotdcp;
 import java.net.SocketAddress;
 import java.util.UUID;
 
+@SuppressWarnings({"unused", "WeakerAccess"})
 public final class IoTDevice {
 	private static final int FlagPasswordProtected = 0x01;
 	private static final int FlagPasswordReadOnly = 0x02;

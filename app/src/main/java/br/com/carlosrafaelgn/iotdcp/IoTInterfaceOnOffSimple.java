@@ -29,6 +29,7 @@
 //
 package br.com.carlosrafaelgn.iotdcp;
 
+@SuppressWarnings({"unused", "WeakerAccess"})
 public final class IoTInterfaceOnOffSimple extends IoTInterface {
 	public static final int CommandOnOff = 0x00;
 

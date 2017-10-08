@@ -29,6 +29,7 @@
 //
 package br.com.carlosrafaelgn.iotdcp;
 
+@SuppressWarnings({"unused", "WeakerAccess"})
 public abstract class IoTInterface {
 	public static final int TypeSensor = 0x00;
 	public static final int TypeOnOff = 0x01;

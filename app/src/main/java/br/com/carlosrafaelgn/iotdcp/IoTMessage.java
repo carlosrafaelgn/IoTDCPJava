@@ -32,6 +32,7 @@ package br.com.carlosrafaelgn.iotdcp;
 import java.net.SocketAddress;
 import java.util.UUID;
 
+@SuppressWarnings({"unused", "WeakerAccess"})
 public final class IoTMessage {
 	final static class Cache {
 		private static final int MaxCacheSize = 32;

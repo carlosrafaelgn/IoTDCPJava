@@ -29,6 +29,7 @@
 //
 package br.com.carlosrafaelgn.iotdcp;
 
+@SuppressWarnings({"unused", "WeakerAccess"})
 public final class IoTInterfaceOpenClose extends IoTInterface {
 	public static final int CommandClose = 0x00;
 	public static final int CommandOpen = 0x01;

@@ -29,6 +29,7 @@
 //
 package br.com.carlosrafaelgn.iotdcp;
 
+@SuppressWarnings({"unused", "WeakerAccess"})
 public final class IoTInterfaceSensor extends IoTInterface {
 	public static final int PropertyValue = 0x00; // Could have any data type and any unit
 
