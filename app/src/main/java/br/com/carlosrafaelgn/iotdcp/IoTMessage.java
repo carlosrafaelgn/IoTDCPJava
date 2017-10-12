@@ -174,6 +174,7 @@ public final class IoTMessage {
 	static final int ClientIdDescribeEnum = 0xFB;
 	static final int ClientIdChangePassword = 0xF9;
 	static final int ClientIdHandshake = 0xF7;
+	static final int InitialInvalidClientId = 0x01; // Java only
 
 	static final int MaximumSequenceNumber = 0x3FFF; // Java only (becomes 0xFFFC when shifted by the devices)
 
@@ -340,7 +341,7 @@ public final class IoTMessage {
 		if (clientId != IoTMessage.ClientIdHandshake ||
 			responseCode != IoTMessage.ResponseOK ||
 			payloadLength != 1)
-			return -1;
+			return IoTMessage.InitialInvalidClientId;
 
 		final int clientId = (payload[0] & 0xFF);
 

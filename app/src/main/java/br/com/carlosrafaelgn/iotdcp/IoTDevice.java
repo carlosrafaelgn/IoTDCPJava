@@ -65,7 +65,7 @@ public final class IoTDevice {
 		this.ioTInterfaces = ioTInterfaces;
 		hash = socketAddress.hashCode() ^ name.hashCode();
 
-		clientId = -1;
+		clientId = IoTMessage.InitialInvalidClientId;
 	}
 
 	@Override
@@ -222,7 +222,7 @@ public final class IoTDevice {
 	}
 
 	public boolean needsHandshake() {
-		return (clientId < 0);
+		return ((clientId & 1) != 0);
 	}
 
 	public void setLocalPassword(String localPassword) {

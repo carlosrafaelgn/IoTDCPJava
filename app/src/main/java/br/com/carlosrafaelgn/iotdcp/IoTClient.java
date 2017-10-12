@@ -254,8 +254,11 @@ public final class IoTClient {
 				observer.onReset(this, (IoTDevice)msg.obj, msg.arg1);
 			break;
 		case IoTMessage.MessageGoodBye:
-			if (observer != null && (msg.obj instanceof IoTDevice))
-				observer.onGoodBye(this, (IoTDevice)msg.obj, msg.arg1);
+			if (observer != null && (msg.obj instanceof IoTDevice)) {
+				final IoTDevice device = (IoTDevice)msg.obj;
+				device.clientId = IoTMessage.InitialInvalidClientId;
+				observer.onGoodBye(this, device, msg.arg1);
+			}
 			break;
 		case IoTMessage.MessageExecute:
 			if (msg.obj instanceof IoTMessage) {
