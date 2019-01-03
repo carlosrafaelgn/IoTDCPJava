@@ -41,6 +41,9 @@ public abstract class IoTInterface {
 	public final int index;
 	public final String name;
 	public final int type;
+
+	public Object userTag;
+
 	private final IoTProperty[] properties;
 
 	public IoTInterface(IoTDevice device, int index, String name, int type, IoTProperty[] properties) {
@@ -59,7 +62,7 @@ public abstract class IoTInterface {
 		return name;
 	}
 
-	@IoTClient.SecondaryThread
+	@SecondaryThread
 	final boolean isComplete_() {
 		for (IoTProperty ioTProperty : properties) {
 			if (!ioTProperty.isComplete_())
@@ -68,45 +71,50 @@ public abstract class IoTInterface {
 		return true;
 	}
 
-	@IoTClient.SecondaryThread
+	@SecondaryThread
 	final void describePropertiesEnum_() {
 		for (IoTProperty ioTProperty : properties)
 			ioTProperty.describeEnum_();
 	}
 
-	@IoTClient.SecondaryThread
+	@SecondaryThread
 	final void handleDescribeEnum_(int responseCode, int propertyIndex, byte[] payload, int payloadLength) {
 		if (propertyIndex >= 0 && propertyIndex < properties.length)
 			properties[propertyIndex].handleDescribeEnum_(responseCode, payload, payloadLength);
 	}
 
 	final boolean execute(int command) {
-		return device.client.execute(this, command);
+		return device.client.execute(this, command, 0);
 	}
 
-	void handleExecute(int responseCode, int command, byte[] payload, int payloadLength) {
+	final boolean execute(int command, int userArg) {
+		return device.client.execute(this, command, userArg);
 	}
 
-	void handleGetProperty(int responseCode, int propertyIndex, byte[] payload, int payloadLength) {
-		if (propertyIndex >= 0 && propertyIndex < properties.length)
-			properties[propertyIndex].handleGetProperty(responseCode, payload, payloadLength);
+	void handleExecute(int responseCode, int command, byte[] payload, int payloadLength, int userArg) {
 	}
 
-	void handleSetProperty(int responseCode, int propertyIndex, byte[] payload, int payloadLength) {
-		if (propertyIndex >= 0 && propertyIndex < properties.length)
-			properties[propertyIndex].handleSetProperty(responseCode, payload, payloadLength);
+	void handleProperty(int propertyIndex, byte[] payload, int payloadOffset, int payloadLength, int userArg) {
+		if (propertyIndex < properties.length)
+			properties[propertyIndex].handleProperty(payload, payloadOffset, payloadLength, userArg);
 	}
 
 	public final int propertyCount() {
 		return properties.length;
 	}
 
-	public IoTProperty property(int propertyIndex) {
+	public final IoTProperty property(int propertyIndex) {
 		return properties[propertyIndex];
 	}
 
-	public final void updateAllProperties() {
+	public final boolean updateAllProperties() {
+		return updateAllProperties(0);
+	}
+
+	public final boolean updateAllProperties(int userArg) {
+		boolean ok = true;
 		for (IoTProperty property : properties)
-			property.updateValue();
+			ok &= property.updateValue(userArg);
+		return ok;
 	}
 }

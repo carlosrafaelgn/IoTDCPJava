@@ -29,21 +29,12 @@
 //
 package br.com.carlosrafaelgn.iotdcp;
 
-@SuppressWarnings({"unused", "WeakerAccess"})
-public final class IoTInterfaceSensor extends IoTInterface {
-	public static final int PropertyValue = 0x00; // Could have any data type and any unit
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
 
-	public final IoTProperty value;
-
-	@SecondaryThread
-	static IoTInterfaceSensor create_(IoTDevice device, int index, String name, IoTProperty[] properties) {
-		return ((properties.length < 1) ? null : new IoTInterfaceSensor(device, index, name, properties));
-	}
-
-	@SecondaryThread
-	private IoTInterfaceSensor(IoTDevice device, int index, String name, IoTProperty[] properties) {
-		super(device, index, name, TypeSensor, properties);
-
-		value = properties[0];
-	}
+@Target({ElementType.METHOD, ElementType.CONSTRUCTOR})
+@Retention(RetentionPolicy.SOURCE)
+@interface MixedThreads {
 }

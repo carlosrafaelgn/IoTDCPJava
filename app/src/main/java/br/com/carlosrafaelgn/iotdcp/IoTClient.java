@@ -38,10 +38,6 @@ import android.os.Message;
 import android.os.SystemClock;
 
 import java.io.IOException;
-import java.lang.annotation.ElementType;
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
-import java.lang.annotation.Target;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
@@ -57,30 +53,22 @@ public final class IoTClient {
 	private static final int IoTPort = 2570;
 	public static final int DefaultMaximumAttempts = 5;
 	public static final int DefaultTimeoutBeforeNextAttempt = 500;
-	public static final int DefaultReceiveBufferSize = 100 * IoTMessage.MaxPayloadLengthEscaped;
-
-	@Target({ElementType.METHOD, ElementType.CONSTRUCTOR})
-	@Retention(RetentionPolicy.SOURCE)
-	@interface SecondaryThread {
-	}
-
-	@Target({ElementType.METHOD, ElementType.CONSTRUCTOR})
-	@Retention(RetentionPolicy.SOURCE)
-	@interface MixedThreads {
-	}
+	public static final int DefaultReceiveBufferSize = 16 * IoTMessage.MaxPayloadLength;
 
 	public interface Observer {
-		void onException(IoTClient client, Throwable ex);
-		void onMessageSent(IoTClient client, IoTDevice device, int message);
+		void onTimeout(IoTClient client, IoTDevice device, int messageType, int userArg);
+		void onException(IoTClient client, Throwable ex, int messageType, int userArg);
+		void onMessageSent(IoTClient client, IoTDevice device, int messageType, int userArg);
 		void onQueryDevice(IoTClient client, IoTDevice device);
-		void onChangePassword(IoTClient client, IoTDevice device, int responseCode, String password);
-		void onHandshake(IoTClient client, IoTDevice device, int responseCode);
-		void onPing(IoTClient client, IoTDevice device, int responseCode);
-		void onReset(IoTClient client, IoTDevice device, int responseCode);
-		void onGoodBye(IoTClient client, IoTDevice device, int responseCode);
-		void onExecute(IoTClient client, IoTDevice device, int responseCode, int interfaceIndex, int command);
-		void onGetProperty(IoTClient client, IoTDevice device, int responseCode, int interfaceIndex, int propertyIndex);
-		void onSetProperty(IoTClient client, IoTDevice device, int responseCode, int interfaceIndex, int propertyIndex);
+		void onChangeName(IoTClient client, IoTDevice device, int responseCode, String name, int userArg);
+		void onChangePassword(IoTClient client, IoTDevice device, int responseCode, String password, int userArg);
+		void onHandshake(IoTClient client, IoTDevice device, int responseCode, int userArg);
+		void onPing(IoTClient client, IoTDevice device, int responseCode, int userArg);
+		void onReset(IoTClient client, IoTDevice device, int responseCode, int userArg);
+		void onGoodBye(IoTClient client, IoTDevice device, int responseCode, int userArg);
+		void onExecute(IoTClient client, IoTDevice device, int responseCode, int interfaceIndex, int command, int userArg);
+		void onGetProperty(IoTClient client, IoTDevice device, int responseCode, int userArg);
+		void onSetProperty(IoTClient client, IoTDevice device, int responseCode, int userArg);
 	}
 
 	private final int maximumAttempts, timeoutBeforeNextAttempt;
@@ -137,11 +125,11 @@ public final class IoTClient {
 		}, "IoTClient Send Thread");
 		senderThread.start();
 		synchronized (senderThreadSync) {
-			if (senderThreadHandler == null) {
+			while (senderThreadHandler == null) {
 				try {
 					senderThreadSync.wait();
 				} catch (Throwable ex) {
-					// just ignore
+					// Just ignore
 				}
 			}
 		}
@@ -150,6 +138,8 @@ public final class IoTClient {
 	private InetSocketAddress getBroadcastAddress() {
 		try {
 			final WifiManager wifi = (WifiManager)context.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+			if (wifi == null)
+				return null;
 			final DhcpInfo dhcp = wifi.getDhcpInfo();
 			final int broadcast = (dhcp.ipAddress & dhcp.netmask) | ~dhcp.netmask;
 			final byte[] quads = new byte[4];
@@ -188,7 +178,7 @@ public final class IoTClient {
 			try {
 				clientThread.join();
 			} catch (Throwable ex) {
-				// just ignore
+				// Just ignore
 			}
 			clientThread = null;
 		}
@@ -197,7 +187,7 @@ public final class IoTClient {
 			try {
 				senderThread.join();
 			} catch (Throwable ex) {
-				// just ignore
+				// Just ignore
 			}
 			senderThread = null;
 		}
@@ -211,19 +201,40 @@ public final class IoTClient {
 		if (!alive)
 			return true;
 		switch (msg.what) {
-		case IoTMessage.ClientMessageException:
-			if (observer != null && (msg.obj instanceof Throwable))
-				observer.onException(this, (Throwable)msg.obj);
+		case IoTMessage.MessageTimeout:
+			if (observer != null && (msg.obj instanceof IoTDevice))
+				observer.onTimeout(this, (IoTDevice)msg.obj, msg.arg1, msg.arg2);
 			break;
-		case IoTMessage.ClientMessageMessageSent:
+		case IoTMessage.MessageException:
+			if (observer != null && (msg.obj instanceof Throwable))
+				observer.onException(this, (Throwable)msg.obj, msg.arg1, msg.arg2);
+			break;
+		case IoTMessage.MessageSent:
 			if (observer != null && ((msg.obj instanceof IoTDevice) || msg.obj == null))
-				observer.onMessageSent(this, (IoTDevice)msg.obj, msg.arg1);
+				observer.onMessageSent(this, (IoTDevice)msg.obj, msg.arg1, msg.arg2);
 			break;
 		case IoTMessage.MessageQueryDevice:
 			if (msg.obj == null)
 				scanningDevices = false;
 			if (observer != null && ((msg.obj instanceof IoTDevice) || msg.obj == null))
 				observer.onQueryDevice(this, (IoTDevice)msg.obj);
+			break;
+		case IoTMessage.MessageChangeName:
+			if (observer != null) {
+				if (msg.obj instanceof IoTMessage) {
+					final IoTMessage message = (IoTMessage)msg.obj;
+					final IoTDevice device = message.device;
+					final int responseCode = message.responseCode;
+					final byte[] name = message.password;
+					messageCache.release_(message);
+					device.name = ((name == null || name.length == 0) ? "IoT" : new String(name));
+					observer.onChangeName(this, device, responseCode, device.name, msg.arg2);
+				} else if (msg.obj instanceof IoTDevice) {
+					observer.onChangeName(this, (IoTDevice)msg.obj, msg.arg1, null, msg.arg2);
+				}
+			} else if (msg.obj instanceof IoTMessage) {
+				messageCache.release_((IoTMessage)msg.obj);
+			}
 			break;
 		case IoTMessage.MessageChangePassword:
 			if (observer != null) {
@@ -233,9 +244,9 @@ public final class IoTClient {
 					final int responseCode = message.responseCode;
 					final byte[] password = message.password;
 					messageCache.release_(message);
-					observer.onChangePassword(this, device, responseCode, (password == null) ? null : new String(password));
+					observer.onChangePassword(this, device, responseCode, (password == null) ? null : new String(password), msg.arg2);
 				} else if (msg.obj instanceof IoTDevice) {
-					observer.onChangePassword(this, (IoTDevice)msg.obj, msg.arg1, null);
+					observer.onChangePassword(this, (IoTDevice)msg.obj, msg.arg1, null, msg.arg2);
 				}
 			} else if (msg.obj instanceof IoTMessage) {
 				messageCache.release_((IoTMessage)msg.obj);
@@ -243,21 +254,21 @@ public final class IoTClient {
 			break;
 		case IoTMessage.MessageHandshake:
 			if (observer != null && (msg.obj instanceof IoTDevice))
-				observer.onHandshake(this, (IoTDevice)msg.obj, msg.arg1);
+				observer.onHandshake(this, (IoTDevice)msg.obj, msg.arg1, msg.arg2);
 			break;
 		case IoTMessage.MessagePing:
 			if (observer != null && (msg.obj instanceof IoTDevice))
-				observer.onPing(this, (IoTDevice)msg.obj, msg.arg1);
+				observer.onPing(this, (IoTDevice)msg.obj, msg.arg1, msg.arg2);
 			break;
 		case IoTMessage.MessageReset:
 			if (observer != null && (msg.obj instanceof IoTDevice))
-				observer.onReset(this, (IoTDevice)msg.obj, msg.arg1);
+				observer.onReset(this, (IoTDevice)msg.obj, msg.arg1, msg.arg2);
 			break;
 		case IoTMessage.MessageGoodBye:
 			if (observer != null && (msg.obj instanceof IoTDevice)) {
 				final IoTDevice device = (IoTDevice)msg.obj;
-				device.clientId = IoTMessage.InitialInvalidClientId;
-				observer.onGoodBye(this, device, msg.arg1);
+				device.clientId = IoTMessage.InvalidClientId;
+				observer.onGoodBye(this, device, msg.arg1, msg.arg2);
 			}
 			break;
 		case IoTMessage.MessageExecute:
@@ -265,14 +276,14 @@ public final class IoTClient {
 				final IoTMessage message = (IoTMessage)msg.obj;
 				final IoTDevice device = message.device;
 				final int responseCode = message.responseCode;
-				final int interfaceIndex = message.interfaceIndex;
-				final int commandOrPropertyIndex = message.commandOrPropertyIndex;
+				final int interfaceIndex = (msg.arg1 & 0xFF);
+				final int command = (msg.arg1 >>> 8);
 				final byte[] payload = message.payload;
 				final int payloadLength = message.payloadLength;
 				messageCache.release_(message);
-				device.handleExecute(responseCode, interfaceIndex, commandOrPropertyIndex, payload, payloadLength);
+				device.handleExecute(responseCode, interfaceIndex, command, payload, payloadLength, msg.arg2);
 				if (observer != null)
-					observer.onExecute(this, device, responseCode, interfaceIndex, commandOrPropertyIndex);
+					observer.onExecute(this, device, responseCode, interfaceIndex, command, msg.arg2);
 			}
 			break;
 		case IoTMessage.MessageGetProperty:
@@ -280,14 +291,13 @@ public final class IoTClient {
 				final IoTMessage message = (IoTMessage)msg.obj;
 				final IoTDevice device = message.device;
 				final int responseCode = message.responseCode;
-				final int interfaceIndex = message.interfaceIndex;
-				final int commandOrPropertyIndex = message.commandOrPropertyIndex;
 				final byte[] payload = message.payload;
 				final int payloadLength = message.payloadLength;
 				messageCache.release_(message);
-				device.handleGetProperty(responseCode, interfaceIndex, commandOrPropertyIndex, payload, payloadLength);
+				if (responseCode == IoTMessage.ResponseOK)
+					device.handleProperty(payload, payloadLength, msg.arg2);
 				if (observer != null)
-					observer.onGetProperty(this, device, responseCode, interfaceIndex, commandOrPropertyIndex);
+					observer.onGetProperty(this, device, responseCode, msg.arg2);
 			}
 			break;
 		case IoTMessage.MessageSetProperty:
@@ -295,14 +305,13 @@ public final class IoTClient {
 				final IoTMessage message = (IoTMessage)msg.obj;
 				final IoTDevice device = message.device;
 				final int responseCode = message.responseCode;
-				final int interfaceIndex = message.interfaceIndex;
-				final int commandOrPropertyIndex = message.commandOrPropertyIndex;
 				final byte[] payload = message.payload;
 				final int payloadLength = message.payloadLength;
 				messageCache.release_(message);
-				device.handleSetProperty(responseCode, interfaceIndex, commandOrPropertyIndex, payload, payloadLength);
+				if (responseCode == IoTMessage.ResponseOK)
+					device.handleProperty(payload, payloadLength, msg.arg2);
 				if (observer != null)
-					observer.onSetProperty(this, device, responseCode, interfaceIndex, commandOrPropertyIndex);
+					observer.onSetProperty(this, device, responseCode, msg.arg2);
 			}
 			break;
 		}
@@ -311,7 +320,7 @@ public final class IoTClient {
 
 	@SecondaryThread
 	private IoTSentMessage[] checkPendingAttempts_(HashMap<SocketAddress, IoTDevice> pendingDevices, IoTSentMessage[] sentMessagesLocalCopy) {
-		// check if there are pending messages that should be resent, or just discarded
+		// Check if there are pending messages that should be resent, or just discarded
 		sentMessagesLocalCopy = sentMessageCache.copySentMessages_(sentMessagesLocalCopy);
 
 		final int now = (int)SystemClock.elapsedRealtime();
@@ -321,33 +330,31 @@ public final class IoTClient {
 			if ((now - sentMessage.timestamp) >= timeoutBeforeNextAttempt) {
 				final int maximumAttempts;
 
-				switch (sentMessage.message) {
+				switch (sentMessage.messageType) {
 				case IoTMessage.MessageExecute:
 				case IoTMessage.MessageGetProperty:
 				case IoTMessage.MessageSetProperty:
 					maximumAttempts = this.maximumAttempts;
 					break;
 				default:
-					// special messages must be retried at least a few times
+					// Special messages must be retried at least a few times
 					maximumAttempts = (this.maximumAttempts <= DefaultMaximumAttempts ? DefaultMaximumAttempts : this.maximumAttempts);
 					break;
 				}
 
 				if (sentMessage.attempts >= maximumAttempts) {
-					// copy whatever could be useful, and release the message before proceeding
+					// Copy whatever could be useful, and release the message before proceeding
 					final SocketAddress socketAddress = sentMessage.socketAddress;
 					final IoTDevice device = sentMessage.device;
-					final int message = sentMessage.message;
-					final int payload0 = sentMessage.payload0;
-					final int payload1 = sentMessage.payload1;
+					final int messageType = sentMessage.messageType;
+					final int userArg = sentMessage.userArg;
 					sentMessageCache.unmarkAsSentMessageAndRelease_(sentMessage);
 
-					// now that we are giving up on this message, try to send the next one
-					final IoTSentMessage nextMessage;
-					if (device != null && (nextMessage = device.nextPendingMessage_()) != null)
-						sendMessage_(nextMessage);
+					// Now that we are giving up on this message, try to send the next one
+					if (device != null)
+						sendNextMessageInDeviceQueue_(device);
 
-					switch (message) {
+					switch (messageType) {
 					case IoTMessage.MessageQueryDevice:
 						mainThreadHandler.sendEmptyMessage(IoTMessage.MessageQueryDevice);
 						break;
@@ -356,22 +363,20 @@ public final class IoTClient {
 						pendingDevices.remove(socketAddress);
 						break;
 
+					case IoTMessage.MessageChangeName:
 					case IoTMessage.MessageChangePassword:
 					case IoTMessage.MessageHandshake:
 					case IoTMessage.MessagePing:
 					case IoTMessage.MessageReset:
 					case IoTMessage.MessageGoodBye:
-						mainThreadHandler.sendMessage(Message.obtain(mainThreadHandler, message, IoTMessage.ResponseTimeout, 0, device));
-						break;
-
 					case IoTMessage.MessageExecute:
 					case IoTMessage.MessageGetProperty:
 					case IoTMessage.MessageSetProperty:
-						mainThreadHandler.sendMessage(Message.obtain(mainThreadHandler, message, messageCache.timeout_(device, payload0, payload1)));
+						mainThreadHandler.sendMessage(Message.obtain(mainThreadHandler, IoTMessage.MessageTimeout, messageType, userArg, device));
 						break;
 					}
 				} else {
-					// try again...
+					// Try again...
 					sendMessage_(sentMessage);
 				}
 			}
@@ -396,11 +401,16 @@ public final class IoTClient {
 		while (alive) {
 			IoTMessage message = null;
 
+			int messageType = IoTMessage.MessageException, userArg = 0;
+
 			try {
 				sentMessagesLocalCopy = checkPendingAttempts_(pendingDevices, sentMessagesLocalCopy);
 
 				recvPacket.setData(buffer);
 				socket.receive(recvPacket);
+
+				if (((InetSocketAddress)recvPacket.getSocketAddress()).getAddress().getHostAddress().equals("192.168.1.4"))
+					continue;
 
 				message = messageCache.parseResponse_(recvPacket.getData(), recvPacket.getLength());
 
@@ -409,7 +419,7 @@ public final class IoTClient {
 
 				final SocketAddress socketAddress = recvPacket.getSocketAddress();
 				final IoTSentMessage sentMessage;
-				placeholder.fillPlaceholder_((message.clientId == IoTMessage.ClientIdQueryDevice) ? broadcastAddress : socketAddress, message.clientId, message.sequenceNumber, message.payload);
+				placeholder.fillPlaceholder_((message.messageType == IoTMessage.MessageQueryDevice) ? broadcastAddress : socketAddress, message.messageType, message.sequenceNumber, message.payload);
 
 				sentMessage = sentMessageCache.getActualSentMessage_(placeholder);
 
@@ -420,16 +430,20 @@ public final class IoTClient {
 				Message messageToSendToMainThread = null;
 
 				try {
-					switch (sentMessage.message) {
+					userArg = sentMessage.userArg;
+
+					switch (messageType = sentMessage.messageType) {
 					case IoTMessage.MessageQueryDevice:
-						// a new device has arrived
+						// A new device has arrived
 						if (devices.containsKey(socketAddress) || pendingDevices.containsKey(socketAddress))
 							break;
-						device = message.parseQueryDevice_(this, socketAddress);
-						if (device == null)
+						// We must not use device here, because that would give a different meaning
+						// to device in the finally block at the end of this try block
+						final IoTDevice newDevice = message.parseQueryDevice_(this, socketAddress);
+						if (newDevice == null)
 							break;
-						pendingDevices.put(socketAddress, device);
-						device.describeInterfaces_();
+						pendingDevices.put(socketAddress, newDevice);
+						newDevice.describeInterfaces_();
 						break;
 
 					default:
@@ -437,7 +451,7 @@ public final class IoTClient {
 						if (device == null)
 							break;
 
-						switch (sentMessage.message) {
+						switch (sentMessage.messageType) {
 						case IoTMessage.MessageDescribeInterface:
 							final IoTInterface ioTInterface = message.parseDescribeInterface_(device);
 							if (ioTInterface == null ||
@@ -446,7 +460,7 @@ public final class IoTClient {
 								break;
 							device.ioTInterfaceDiscovered_(ioTInterface);
 							if (device.isComplete_()) {
-								// this device is ready to be used!
+								// This device is ready to be used!
 								pendingDevices.remove(socketAddress);
 								devices.put(socketAddress, device);
 								messageToSendToMainThread = Message.obtain(mainThreadHandler, IoTMessage.MessageQueryDevice, device);
@@ -456,60 +470,69 @@ public final class IoTClient {
 						case IoTMessage.MessageDescribeEnum:
 							device.handleDescribeEnum_(message.responseCode, message.payload, message.payloadLength);
 							if (device.isComplete_()) {
-								// this device is ready to be used!
+								// This device is ready to be used!
 								pendingDevices.remove(socketAddress);
 								devices.put(socketAddress, device);
 								messageToSendToMainThread = Message.obtain(mainThreadHandler, IoTMessage.MessageQueryDevice, device);
 							}
 							break;
 
+						case IoTMessage.MessageChangeName:
+							message.device = device;
+							message.password = sentMessage.password;
+							messageToSendToMainThread = Message.obtain(mainThreadHandler, IoTMessage.MessageChangeName, 0, sentMessage.userArg, message);
+							message = null; // Do not release this message here
+							break;
+
 						case IoTMessage.MessageChangePassword:
 							message.device = device;
 							message.password = sentMessage.password;
-							messageToSendToMainThread = Message.obtain(mainThreadHandler, IoTMessage.MessageChangePassword, message);
-							message = null; // do not release this message here
+							messageToSendToMainThread = Message.obtain(mainThreadHandler, IoTMessage.MessageChangePassword, 0, sentMessage.userArg, message);
+							message = null; // Do not release this message here
 							break;
 
 						case IoTMessage.MessageHandshake:
 							device.sequenceNumber = 0;
 							device.clientId = message.parseHandshake_();
-							messageToSendToMainThread = Message.obtain(mainThreadHandler, IoTMessage.MessageHandshake, message.responseCode, 0, device);
+							messageToSendToMainThread = Message.obtain(mainThreadHandler, IoTMessage.MessageHandshake, message.responseCode, sentMessage.userArg, device);
 							break;
 
 						case IoTMessage.MessagePing:
 						case IoTMessage.MessageReset:
 						case IoTMessage.MessageGoodBye:
-							messageToSendToMainThread = Message.obtain(mainThreadHandler, sentMessage.message, message.responseCode, 0, device);
+							messageToSendToMainThread = Message.obtain(mainThreadHandler, sentMessage.messageType, message.responseCode, sentMessage.userArg, device);
 							break;
 
 						case IoTMessage.MessageExecute:
+							message.device = device;
+							messageToSendToMainThread = Message.obtain(mainThreadHandler, IoTMessage.MessageExecute, sentMessage.executedInterfaceIndex | (sentMessage.executedCommand << 8), sentMessage.userArg, message);
+							message = null; // Do not release this message here
+							break;
+
 						case IoTMessage.MessageGetProperty:
 						case IoTMessage.MessageSetProperty:
 							message.device = device;
-							message.interfaceIndex = sentMessage.payload0;
-							message.commandOrPropertyIndex = sentMessage.payload1;
-							messageToSendToMainThread = Message.obtain(mainThreadHandler, sentMessage.message, message);
-							message = null; // do not release this message here
+							messageToSendToMainThread = Message.obtain(mainThreadHandler, sentMessage.messageType, 0, sentMessage.userArg, message);
+							message = null; // Do not release this message here
 							break;
 						}
 					}
 				} finally {
-					// do not remove query device messages (let them timeout)
-					// also, we must first release the old message/send the new one,
+					// Do not remove query device messages (let them timeout).
+					// Also, we must first release the old message/send the new one,
 					// before sending the message to the main thread, to guarantee
 					// that isWaitingForResponses() reflects the correct scenario!
-					if (sentMessage.message != IoTMessage.MessageQueryDevice)
+					if (messageType != IoTMessage.MessageQueryDevice)
 						sentMessageCache.unmarkAsSentMessageAndRelease_(sentMessage);
-					final IoTSentMessage nextMessage;
-					if (device != null && (nextMessage = device.nextPendingMessage_()) != null)
-						sendMessage_(nextMessage);
+					if (device != null)
+						sendNextMessageInDeviceQueue_(device);
 					if (messageToSendToMainThread != null)
 						mainThreadHandler.sendMessage(messageToSendToMainThread);
 				}
 			} catch (SocketTimeoutException ex) {
-				// just ignore, we will try again later
+				// Just ignore, we will try again later
 			} catch (Throwable ex) {
-				mainThreadHandler.sendMessage(Message.obtain(mainThreadHandler, IoTMessage.ClientMessageException, ex));
+				mainThreadHandler.sendMessage(Message.obtain(mainThreadHandler, IoTMessage.MessageException, messageType, userArg, ex));
 			} finally {
 				if (message != null)
 					messageCache.release_(message);
@@ -530,20 +553,22 @@ public final class IoTClient {
 				if (!alive || !(msg.obj instanceof IoTSentMessage))
 					return true;
 				final IoTSentMessage sentMessage = (IoTSentMessage)msg.obj;
+				int messageType = IoTMessage.MessageException, userArg = 0;
 				try {
 					final IoTDevice device = sentMessage.device;
-					final int message = sentMessage.message;
+					messageType = sentMessage.messageType;
+					userArg = sentMessage.userArg;
 					sentPacket.setSocketAddress(sentMessage.socketAddress);
 					sentPacket.setData(buffer, 0, sentMessage.build_(buffer));
 					sentMessageCache.markAsSentMessage_(sentMessage);
 					socket.send(sentPacket);
 					if (msg.what != 0)
-						mainThreadHandler.sendMessage(Message.obtain(mainThreadHandler, IoTMessage.ClientMessageMessageSent, message, 0, device));
+						mainThreadHandler.sendMessage(Message.obtain(mainThreadHandler, IoTMessage.MessageSent, messageType, userArg, device));
 				} catch (Throwable ex) {
 					sentMessageCache.unmarkAsSentMessageAndRelease_(sentMessage);
 					final Handler h = mainThreadHandler;
 					if (h != null)
-						h.sendMessage(Message.obtain(h, IoTMessage.ClientMessageException, ex));
+						h.sendMessage(Message.obtain(h, IoTMessage.MessageException, messageType, userArg, ex));
 				}
 				return true;
 			}
@@ -555,10 +580,10 @@ public final class IoTClient {
 	}
 
 	@SecondaryThread
-	private void doSendMessage_(IoTSentMessage sentMessage, boolean notifyObserver) {
-		if (sentMessage.device == null ||
-			sentMessage.attempts > 0 || // messages being retried must not be sent to canSendMessageNow_()
-			sentMessage.device.canSendMessageNow_(sentMessageCache, sentMessage)) {
+	private void doSendMessage_(IoTSentMessage sentMessage, boolean notifyObserver, boolean skipQueue) {
+		if (skipQueue ||
+			sentMessage.device == null ||
+			sentMessage.device.canSendMessageNowAndIfNotEnqueue_(sentMessageCache, sentMessage)) {
 			sentMessage.attempts++;
 			sentMessage.timestamp = (int)SystemClock.elapsedRealtime();
 			senderThreadHandler.sendMessage(Message.obtain(senderThreadHandler, notifyObserver ? 1 : 0, sentMessage));
@@ -567,14 +592,22 @@ public final class IoTClient {
 
 	@SecondaryThread
 	private void sendMessage_(IoTSentMessage sentMessage) {
-		// do not notify the observer when a message is being retried
-		doSendMessage_(sentMessage, sentMessage.attempts == 0);
+		doSendMessage_(sentMessage,
+			sentMessage.attempts == 0, // Notify the observer only when a message is sent for the first time
+			sentMessage.attempts > 0); // Messages being retried must not be enqueued again
+	}
+
+	@SecondaryThread
+	private void sendNextMessageInDeviceQueue_(IoTDevice device) {
+		final IoTSentMessage sentMessage;
+		if ((sentMessage = device.markSentMessageAsReceivedAndGetNextMessageInQueue_()) != null)
+			doSendMessage_(sentMessage, true, true);
 	}
 
 	private boolean sendMessage(IoTSentMessage sentMessage) {
 		if (!alive || senderThreadHandler == null)
 			return false;
-		doSendMessage_(sentMessage, true);
+		doSendMessage_(sentMessage, true, false);
 		return true;
 	}
 
@@ -596,35 +629,35 @@ public final class IoTClient {
 		sendMessage_(sentMessageCache.describeEnum_(property.ioTInterface, property.index));
 	}
 
-	boolean changePassword(IoTDevice device, String password) {
-		return sendMessage(sentMessageCache.changePassword(device, password));
+	boolean changePassword(IoTDevice device, String password, int userArg) {
+		return sendMessage(sentMessageCache.changePassword(device, password, userArg));
 	}
 
-	boolean handshake(IoTDevice device) {
-		return sendMessage(sentMessageCache.handshake(device));
+	boolean handshake(IoTDevice device, int userArg) {
+		return sendMessage(sentMessageCache.handshake(device, userArg));
 	}
 
-	boolean ping(IoTDevice device) {
-		return sendMessage(sentMessageCache.ping(device));
+	boolean ping(IoTDevice device, int userArg) {
+		return sendMessage(sentMessageCache.ping(device, userArg));
 	}
 
-	boolean reset(IoTDevice device) {
-		return sendMessage(sentMessageCache.reset(device));
+	boolean reset(IoTDevice device, int userArg) {
+		return sendMessage(sentMessageCache.reset(device, userArg));
 	}
 
-	boolean goodBye(IoTDevice device) {
-		return sendMessage(sentMessageCache.goodBye(device));
+	boolean goodBye(IoTDevice device, int userArg) {
+		return sendMessage(sentMessageCache.goodBye(device, userArg));
 	}
 
-	boolean execute(IoTInterface ioTInterface, int command) {
-		return sendMessage(sentMessageCache.execute(ioTInterface, command));
+	boolean execute(IoTInterface ioTInterface, int command, int userArg) {
+		return sendMessage(sentMessageCache.execute(ioTInterface, command, userArg));
 	}
 
-	boolean getProperty(IoTProperty property) {
-		return sendMessage(sentMessageCache.getProperty(property.ioTInterface, property.index));
+	boolean getProperty(IoTProperty property, int userArg) {
+		return sendMessage(sentMessageCache.getProperty(property.ioTInterface, property.index, userArg));
 	}
 
-	boolean setProperty(IoTProperty property, IoTProperty.Buffer value) {
-		return sendMessage(sentMessageCache.setProperty(property.ioTInterface, property.index, value));
+	boolean setProperty(IoTProperty property, IoTProperty.Buffer value, int userArg) {
+		return sendMessage(sentMessageCache.setProperty(property.ioTInterface, property.index, value, userArg));
 	}
 }

@@ -43,7 +43,7 @@ public final class IoTInterfaceOnOffSimple extends IoTInterface {
 
 	public final IoTProperty state;
 
-	@IoTClient.SecondaryThread
+	@SecondaryThread
 	static IoTInterfaceOnOffSimple create_(IoTDevice device, int index, String name, IoTProperty[] properties) {
 		if (properties.length < 1 || !properties[0].isReadableEnum8_())
 			return null;
@@ -57,7 +57,7 @@ public final class IoTInterfaceOnOffSimple extends IoTInterface {
 		return new IoTInterfaceOnOffSimple(device, index, name, properties);
 	}
 
-	@IoTClient.SecondaryThread
+	@SecondaryThread
 	private IoTInterfaceOnOffSimple(IoTDevice device, int index, String name, IoTProperty[] properties) {
 		super(device, index, name, TypeOnOffSimple, properties);
 
@@ -65,11 +65,12 @@ public final class IoTInterfaceOnOffSimple extends IoTInterface {
 	}
 
 	@Override
-	void handleExecute(int responseCode, int command, byte[] payload, int payloadLength) {
+	void handleExecute(int responseCode, int command, byte[] payload, int payloadLength, int userArg) {
 		if (command != CommandOnOff)
 			return;
 
-		handleGetProperty(responseCode, PropertyState, payload, payloadLength);
+		if (responseCode == IoTMessage.ResponseOK)
+			device.handleProperty(payload, payloadLength, userArg);
 	}
 
 	public boolean executeOnOff() {

@@ -44,7 +44,7 @@ public final class IoTInterfaceOpenClose extends IoTInterface {
 
 	public final IoTProperty state;
 
-	@IoTClient.SecondaryThread
+	@SecondaryThread
 	static IoTInterfaceOpenClose create_(IoTDevice device, int index, String name, IoTProperty[] properties) {
 		if (properties.length < 1 || !properties[0].isReadableEnum8_())
 			return null;
@@ -58,7 +58,7 @@ public final class IoTInterfaceOpenClose extends IoTInterface {
 		return new IoTInterfaceOpenClose(device, index, name, properties);
 	}
 
-	@IoTClient.SecondaryThread
+	@SecondaryThread
 	private IoTInterfaceOpenClose(IoTDevice device, int index, String name, IoTProperty[] properties) {
 		super(device, index, name, TypeOpenClose, properties);
 
@@ -66,11 +66,12 @@ public final class IoTInterfaceOpenClose extends IoTInterface {
 	}
 
 	@Override
-	void handleExecute(int responseCode, int command, byte[] payload, int payloadLength) {
+	void handleExecute(int responseCode, int command, byte[] payload, int payloadLength, int userArg) {
 		if (command != CommandClose && command != CommandOpen)
 			return;
 
-		handleGetProperty(responseCode, PropertyState, payload, payloadLength);
+		if (responseCode == IoTMessage.ResponseOK)
+			device.handleProperty(payload, payloadLength, userArg);
 	}
 
 	public boolean executeClose() {

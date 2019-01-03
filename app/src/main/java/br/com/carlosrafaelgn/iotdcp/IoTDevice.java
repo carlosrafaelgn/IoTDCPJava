@@ -34,14 +34,17 @@ import java.util.UUID;
 
 @SuppressWarnings({"unused", "WeakerAccess"})
 public final class IoTDevice {
-	private static final int FlagPasswordProtected = 0x01;
-	private static final int FlagPasswordReadOnly = 0x02;
-	private static final int FlagResetSupported = 0x04;
-	private static final int FlagEncryptionRequired = 0x08;
+	private static final int FlagNameReadOnly = 0x01;
+	private static final int FlagPasswordProtected = 0x02;
+	private static final int FlagPasswordReadOnly = 0x04;
+	private static final int FlagResetSupported = 0x08;
+	private static final int FlagEncryptionRequired = 0x10;
 
 	public final IoTClient client;
 	public final UUID categoryUuid, uuid;
-	public final String name;
+	public String name;
+
+	public Object userTag;
 
 	private final int flags;
 	private final IoTInterface[] ioTInterfaces;
@@ -51,9 +54,9 @@ public final class IoTDevice {
 	int clientId, sequenceNumber;
 	byte[] password;
 
-	// used from a secondary thread, in a synchronized block
-	private boolean hasPendingMessage;
-	private IoTSentMessage firstPendingMessage, lastPendingMessage;
+	// Used from a secondary thread, in a synchronized block
+	private boolean isSentMessageWaitingToBeReceived;
+	private IoTSentMessage firstEnqueuedMessage, lastEnqueuedMessage;
 
 	public IoTDevice(IoTClient client, SocketAddress socketAddress, int flags, UUID categoryUuid, UUID uuid, String name, IoTInterface[] ioTInterfaces) {
 		this.client = client;
@@ -63,9 +66,9 @@ public final class IoTDevice {
 		this.uuid = uuid;
 		this.name = name;
 		this.ioTInterfaces = ioTInterfaces;
-		hash = socketAddress.hashCode() ^ name.hashCode();
+		hash = socketAddress.hashCode();
 
-		clientId = IoTMessage.InitialInvalidClientId;
+		clientId = IoTMessage.InvalidClientId;
 	}
 
 	@Override
@@ -80,10 +83,10 @@ public final class IoTDevice {
 
 	@Override
 	public boolean equals(Object o) {
-		return (o != null && (o == this || ((o instanceof IoTDevice) && ((IoTDevice)o).socketAddress.equals(socketAddress) && ((IoTDevice)o).name.equals(name))));
+		return (o != null && (o == this || ((o instanceof IoTDevice) && ((IoTDevice)o).socketAddress.equals(socketAddress))));
 	}
 
-	@IoTClient.SecondaryThread
+	@SecondaryThread
 	boolean isComplete_() {
 		for (IoTInterface ioTInterface : ioTInterfaces) {
 			if (ioTInterface == null || !ioTInterface.isComplete_())
@@ -92,43 +95,43 @@ public final class IoTDevice {
 		return true;
 	}
 
-	@IoTClient.SecondaryThread
-	boolean canSendMessageNow_(IoTSentMessage.Cache cache, IoTSentMessage sentMessage) {
+	@SecondaryThread
+	boolean canSendMessageNowAndIfNotEnqueue_(IoTSentMessage.Cache cache, IoTSentMessage sentMessage) {
 		synchronized (ioTInterfaces) {
-			if (!hasPendingMessage) {
-				hasPendingMessage = true;
+			if (!isSentMessageWaitingToBeReceived) {
+				isSentMessageWaitingToBeReceived = true;
 				return true;
 			}
-			if (lastPendingMessage == null) {
-				firstPendingMessage = sentMessage;
+			if (firstEnqueuedMessage == null) {
+				firstEnqueuedMessage = sentMessage;
 			} else {
-				switch (sentMessage.message) {
+				switch (sentMessage.messageType) {
 				case IoTMessage.MessageGetProperty:
 				case IoTMessage.MessageSetProperty:
-					// replace repeated get/set property messages (identical interface index and
-					// identical property index) with the most recent one
-					IoTSentMessage previous = null, current = firstPendingMessage;
+					// Replace repeated get/set property messages with the most recent one
+					IoTSentMessage previous = null, current = firstEnqueuedMessage;
 					while (current != null) {
-						if (current.message == sentMessage.message &&
-							current.payload0 == sentMessage.payload0 &&
-							current.payload1 == sentMessage.payload1) {
-							// is this message already enqueued?
+						if (current.messageType == sentMessage.messageType &&
+							current.isSimilarGetSetPropertyMessage(sentMessage)) {
+							// Is this message already enqueued?
 							if (current == sentMessage)
 								return false;
-							// return this message to the cache, as it will no longer be used
+							// Return this message to the cache, as it will no longer be used
 							cache.release_(current);
-							// remove this message from the queue
+							// Remove this message from the queue
 							if (previous == null) {
-								firstPendingMessage = current.next;
-								if (firstPendingMessage == null)
-									firstPendingMessage = sentMessage;
+								firstEnqueuedMessage = current.next;
+								// If current was the only message in the queue, then sentMessage
+								// is now the new first message in the queue
+								if (firstEnqueuedMessage == null)
+									firstEnqueuedMessage = sentMessage;
 							} else {
 								previous.next = current.next;
 							}
-							// it is not necessary to set lastPendingMessage.next to null
-							// because lastPendingMessage.next will be set down below
-							if (lastPendingMessage == current)
-								lastPendingMessage = previous;
+							// It is not necessary to set lastEnqueuedMessage.next to null
+							// because lastEnqueuedMessage.next will be set down below
+							if (lastEnqueuedMessage == current)
+								lastEnqueuedMessage = previous;
 							break;
 						}
 						previous = current;
@@ -136,35 +139,38 @@ public final class IoTDevice {
 					}
 					break;
 				}
-				if (lastPendingMessage != null)
-					lastPendingMessage.next = sentMessage;
+				if (lastEnqueuedMessage != null)
+					lastEnqueuedMessage.next = sentMessage;
 			}
-			lastPendingMessage = sentMessage;
+			lastEnqueuedMessage = sentMessage;
+			sentMessage.next = null;
 			return false;
 		}
 	}
 
-	@IoTClient.SecondaryThread
-	IoTSentMessage nextPendingMessage_() {
+	@SecondaryThread
+	IoTSentMessage markSentMessageAsReceivedAndGetNextMessageInQueue_() {
 		synchronized (ioTInterfaces) {
-			hasPendingMessage = false;
-			if (firstPendingMessage == null)
+			if (firstEnqueuedMessage == null) {
+				isSentMessageWaitingToBeReceived = false;
 				return null;
-			final IoTSentMessage next = firstPendingMessage;
-			firstPendingMessage = next.next;
-			if (firstPendingMessage == null)
-				lastPendingMessage = null;
+			}
+			isSentMessageWaitingToBeReceived = true;
+			final IoTSentMessage next = firstEnqueuedMessage;
+			firstEnqueuedMessage = next.next;
+			if (firstEnqueuedMessage == null)
+				lastEnqueuedMessage = null;
 			return next;
 		}
 	}
 
-	@IoTClient.SecondaryThread
+	@SecondaryThread
 	void describeInterfaces_() {
 		for (int i = ioTInterfaces.length - 1; i >= 0; i--)
 			client.describeInterface_(this, i);
 	}
 
-	@IoTClient.SecondaryThread
+	@SecondaryThread
 	void ioTInterfaceDiscovered_(IoTInterface ioTInterface) {
 		if (ioTInterfaces[ioTInterface.index] == null) {
 			ioTInterfaces[ioTInterface.index] = ioTInterface;
@@ -172,29 +178,35 @@ public final class IoTDevice {
 		}
 	}
 
-	@IoTClient.SecondaryThread
+	@SecondaryThread
 	void handleDescribeEnum_(int responseCode, byte[] payload, int payloadLength) {
 		if (payloadLength < 3)
 			return;
 		final int interfaceIndex = (payload[0] & 0xFF);
 		final int propertyIndex = (payload[1] & 0xFF);
-		if (interfaceIndex >= 0 && interfaceIndex < ioTInterfaces.length)
+		if (interfaceIndex < ioTInterfaces.length)
 			ioTInterfaces[interfaceIndex].handleDescribeEnum_(responseCode, propertyIndex, payload, payloadLength);
 	}
 
-	void handleExecute(int responseCode, int interfaceIndex, int command, byte[] payload, int payloadLength) {
-		if (interfaceIndex >= 0 && interfaceIndex < ioTInterfaces.length)
-			ioTInterfaces[interfaceIndex].handleExecute(responseCode, command, payload, payloadLength);
+	void handleExecute(int responseCode, int interfaceIndex, int command, byte[] payload, int payloadLength, int userArg) {
+		if (interfaceIndex < ioTInterfaces.length)
+			ioTInterfaces[interfaceIndex].handleExecute(responseCode, command, payload, payloadLength, userArg);
 	}
 
-	void handleGetProperty(int responseCode, int interfaceIndex, int propertyIndex, byte[] payload, int payloadLength) {
-		if (interfaceIndex >= 0 && interfaceIndex < ioTInterfaces.length)
-			ioTInterfaces[interfaceIndex].handleGetProperty(responseCode, propertyIndex, payload, payloadLength);
-	}
-
-	void handleSetProperty(int responseCode, int interfaceIndex, int propertyIndex, byte[] payload, int payloadLength) {
-		if (interfaceIndex >= 0 && interfaceIndex < ioTInterfaces.length)
-			ioTInterfaces[interfaceIndex].handleSetProperty(responseCode, propertyIndex, payload, payloadLength);
+	void handleProperty(byte[] payload, int payloadLength, int userArg) {
+		if (payload == null)
+			return;
+		int payloadOffset = 0;
+		while ((payloadLength - payloadOffset) >= 4) {
+			final int interfaceIndex = (payload[payloadOffset++] & 0xFF);
+			final int propertyIndex = (payload[payloadOffset++] & 0xFF);
+			final int propertyPayloadLength = (payload[payloadOffset++] & 0xFF) | ((payload[payloadOffset++] & 0xFF) << 8);
+			if ((payloadOffset + propertyPayloadLength) > payloadLength)
+				break;
+			if (interfaceIndex < ioTInterfaces.length)
+				ioTInterfaces[interfaceIndex].handleProperty(propertyIndex, payload, payloadOffset, propertyPayloadLength, userArg);
+			payloadOffset += propertyPayloadLength;
+		}
 	}
 
 	int nextSequenceNumber() {
@@ -207,6 +219,10 @@ public final class IoTDevice {
 
 	public IoTInterface ioTInterface(int interfaceIndex) {
 		return ioTInterfaces[interfaceIndex];
+	}
+
+	public boolean isNameReadOnly() {
+		return ((flags & FlagNameReadOnly) != 0);
 	}
 
 	public boolean isPasswordProtected() {
@@ -222,35 +238,61 @@ public final class IoTDevice {
 	}
 
 	public boolean needsHandshake() {
-		return ((clientId & 1) != 0);
+		return (clientId == IoTMessage.InvalidClientId);
 	}
 
 	public void setLocalPassword(String localPassword) {
 		this.password = ((!isPasswordProtected() || localPassword == null || localPassword.length() == 0) ? null : localPassword.getBytes());
 	}
 
-	public void changePassword(String password) {
-		client.changePassword(this, password);
+	public boolean changePassword(String password) {
+		return client.changePassword(this, password, 0);
 	}
 
-	public void handshake() {
-		client.handshake(this);
+	public boolean changePassword(String password, int userArg) {
+		return client.changePassword(this, password, userArg);
 	}
 
-	public void ping() {
-		client.ping(this);
+	public boolean handshake() {
+		return client.handshake(this, 0);
 	}
 
-	public void reset() {
-		client.reset(this);
+	public boolean handshake(int userArg) {
+		return client.handshake(this, userArg);
 	}
 
-	public void goodBye() {
-		client.goodBye(this);
+	public boolean ping() {
+		return client.ping(this, 0);
 	}
 
-	public void updateAllProperties() {
+	public boolean ping(int userArg) {
+		return client.ping(this, userArg);
+	}
+
+	public boolean reset() {
+		return client.reset(this, 0);
+	}
+
+	public boolean reset(int userArg) {
+		return client.reset(this, userArg);
+	}
+
+	public boolean goodBye() {
+		return client.goodBye(this, 0);
+	}
+
+	public boolean goodBye(int userArg) {
+		return client.goodBye(this, userArg);
+	}
+
+	public boolean updateAllProperties() {
+		return updateAllProperties(0);
+	}
+
+	public boolean updateAllProperties(int userArg) {
+		boolean ok = true;
 		for (IoTInterface ioTInterface : ioTInterfaces)
-			ioTInterface.updateAllProperties();
+			ok &= ioTInterface.updateAllProperties(userArg);
+		return ok;
 	}
 }

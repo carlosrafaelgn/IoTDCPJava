@@ -34,17 +34,17 @@ import java.util.UUID;
 
 @SuppressWarnings({"unused", "WeakerAccess"})
 public final class IoTMessage {
-	final static class Cache {
+	static final class Cache {
 		private static final int MaxCacheSize = 32;
 		private final IoTMessage[] cache = new IoTMessage[MaxCacheSize];
 		private final byte[] emptyPayload = new byte[0];
 
-		@IoTClient.SecondaryThread
-		private IoTMessage create_(int clientId, int sequenceNumber, int responseCode, int payloadLength, byte[] payload) {
+		@SecondaryThread
+		private IoTMessage create_(int messageType, int clientId, int sequenceNumber, int responseCode, int payloadLength, byte[] payload) {
 			IoTMessage message = null;
 			synchronized (cache) {
 				for (int i = MaxCacheSize - 1; i >= 0; i--) {
-					// try to fetch the first available message, from the end
+					// Try to fetch the first available message, from the end
 					if (cache[i] != null) {
 						message = cache[i];
 						cache[i] = null;
@@ -56,6 +56,7 @@ public final class IoTMessage {
 			if (message == null)
 				message = new IoTMessage();
 
+			message.messageType = messageType;
 			message.clientId = clientId;
 			message.sequenceNumber = sequenceNumber;
 			message.responseCode = responseCode;
@@ -65,7 +66,7 @@ public final class IoTMessage {
 			return message;
 		}
 
-		@IoTClient.MixedThreads
+		@MixedThreads
 		void release_(IoTMessage message) {
 			synchronized (cache) {
 				message.payload = null;
@@ -73,7 +74,7 @@ public final class IoTMessage {
 				message.password = null;
 
 				for (int i = MaxCacheSize - 1; i >= 0; i--) {
-					// try to return this message at the first available spot
+					// Try to return this message at the first available spot
 					if (cache[i] == null) {
 						cache[i] = message;
 						return;
@@ -82,165 +83,110 @@ public final class IoTMessage {
 			}
 		}
 
-		@IoTClient.SecondaryThread
+		@SecondaryThread
 		@SuppressWarnings("ConstantConditions")
 		IoTMessage parseResponse_(byte[] srcBuffer, int length) {
-			int state = 0;
-			int clientId = 0, sequenceNumber = 0, responseCode = 0, payloadLength = 0, payloadReceivedLength = 0, payloadIndex = 0;
-			byte[] payload = null;
-			for (int i = 0; i < length; i++) {
-				byte b = srcBuffer[i];
+			if (srcBuffer == null ||
+				length < (ResponseHeaderLength + EndOfPacketLength) ||
+				srcBuffer[0] != StartOfPacket ||
+				srcBuffer[length - 1] != EndOfPacket)
+				return null;
 
-				if (b == StartOfPacket) {
-					state = 1;
-					continue;
-				}
+			final int message = (srcBuffer[1] & 0xFF),
+				clientId = (srcBuffer[2] & 0xFF),
+				sequenceNumber = (srcBuffer[3] & 0xFF) | ((srcBuffer[4] & 0xFF) << 8),
+				responseCode = (srcBuffer[5] & 0xFF),
+				payloadLength = (srcBuffer[6] & 0xFF) | ((srcBuffer[7] & 0xFF) << 8),
+				actualPayloadLength = length - (ResponseHeaderLength + EndOfPacketLength);
 
-				switch ((state & StateMask)) {
-				case 7:
-					if ((state & FlagEscape) != 0) {
-						b ^= 1;
-						state &= ~FlagEscape;
-					} else if (b == Escape) {
-						payloadReceivedLength++;
-						state |= FlagEscape;
-						break;
-					}
+			if (payloadLength > MaxPayloadLength ||
+				actualPayloadLength != payloadLength)
+				return null;
 
-					if (payloadReceivedLength == payloadLength) {
-						state = 0;
-						if (b != EndOfPacket)
-							continue;
+			final byte[] payload;
 
-						return create_(clientId, sequenceNumber, responseCode, payloadIndex, payload);
-					}
-
-					payloadReceivedLength++;
-
-					payload[payloadIndex] = b;
-					payloadIndex++;
-					break;
-				case 1:
-					clientId = (b & 0xFF);
-					state++;
-					break;
-				case 2:
-					sequenceNumber = ((b & 0xFF) >>> 1);
-					state++;
-					break;
-				case 3:
-					sequenceNumber |= ((b & 0xFF) << 6);
-					state++;
-					break;
-				case 4:
-					responseCode = (b & 0xFF);
-					state++;
-					break;
-				case 5:
-					payloadLength = ((b & 0xFF) >>> 1);
-					state++;
-					break;
-				case 6:
-					payloadLength |= ((b & 0xFF) << 6);
-					state++;
-					if (payloadLength == 0)
-						payload = emptyPayload;
-					else if (payloadLength > MaxPayloadLengthEscaped)
-						state = 0;
-					else
-						payload = new byte[payloadLength];
-					break;
-				}
+			if (payloadLength == 0) {
+				payload = emptyPayload;
+			} else {
+				payload = new byte[payloadLength];
+				System.arraycopy(srcBuffer, ResponseHeaderLength, payload, 0, payloadLength);
 			}
-			return null;
-		}
 
-		@IoTClient.SecondaryThread
-		IoTMessage timeout_(IoTDevice device, int interfaceIndex, int commandOrPropertyIndex) {
-			final IoTMessage message = create_(0, 0, ResponseTimeout, 0, null);
-			message.device = device;
-			message.interfaceIndex = interfaceIndex;
-			message.commandOrPropertyIndex = commandOrPropertyIndex;
-			return message;
+			return create_(message, clientId, sequenceNumber, responseCode, payloadLength, payload);
 		}
 	}
 
-	static final int MaxPayloadLengthEscaped = 4096;
-	static final int MaxPasswordLengthUnescaped = 32;
-	private static final int MaxPasswordLengthEscaped = MaxPasswordLengthUnescaped * 2;
+	static final int MaxPayloadLength = 32768;
+	static final int MaxPasswordLength = 64;
 
-	static final int ClientIdQueryDevice = 0xFF;
-	static final int ClientIdDescribeInterface = 0xFD;
-	static final int ClientIdDescribeEnum = 0xFB;
-	static final int ClientIdChangePassword = 0xF9;
-	static final int ClientIdHandshake = 0xF7;
-	static final int InitialInvalidClientId = 0x01; // Java only
+	static final int InvalidClientId = 255;
 
-	static final int MaximumSequenceNumber = 0x3FFF; // Java only (becomes 0xFFFC when shifted by the devices)
+	static final int MaximumSequenceNumber = 0xFFFF; // Java only
 
-	static final int ClientMessageException = -1; // Java only (does not come from devices)
-	static final int ClientMessageMessageSent = -2; // Java only (does not come from devices)
-	static final int MessageQueryDevice = 0x00;
-	static final int MessageDescribeInterface = 0x02;
-	static final int MessageDescribeEnum = 0x04;
-	static final int MessageChangePassword = 0x06;
-	static final int MessageHandshake = 0x08;
-	static final int MessagePing = 0x0A;
-	static final int MessageReset = 0x0C;
-	static final int MessageGoodBye = 0x0E;
-	static final int MessageExecute = 0x10;
-	static final int MessageGetProperty = 0x12;
-	static final int MessageSetProperty = 0x14;
+	static final int MessageTimeout = -1; // Java only (does not come from devices)
+	static final int MessageException = -2; // Java only (does not come from devices)
+	static final int MessageSent = -3; // Java only (does not come from devices)
+	public static final int MessageQueryDevice = 0x00;
+	public static final int MessageDescribeInterface = 0x01;
+	public static final int MessageDescribeEnum = 0x02;
+	public static final int MessageChangeName = 0x03;
+	public static final int MessageChangePassword = 0x04;
+	public static final int MessageHandshake = 0x05;
+	public static final int MessagePing = 0x06;
+	public static final int MessageReset = 0x07;
+	public static final int MessageGoodBye = 0x08;
+	public static final int MessageExecute = 0x09;
+	public static final int MessageGetProperty = 0x0A;
+	public static final int MessageSetProperty = 0x0B;
 
-	public static final int ResponseTimeout = -1; // Java only (does not come from devices)
+	static final int ServerMessagePropertyChange = 0x80;
+
 	public static final int ResponseOK = 0x00;
-	public static final int ResponseDeviceError = 0x02;
-	public static final int ResponseUnknownClient = 0x04;
-	public static final int ResponseUnsupportedMessage = 0x06;
-	public static final int ResponsePayloadTooLarge = 0x08;
-	public static final int ResponseInvalidPayload = 0x0A;
-	public static final int ResponseEndOfPacketNotFound = 0x0C;
-	public static final int ResponseWrongPassword = 0x0E;
-	public static final int ResponsePasswordReadOnly = 0x10;
-	public static final int ResponseCannotChangePasswordNow = 0x12;
-	public static final int ResponseInvalidInterface = 0x14;
-	public static final int ResponseInvalidInterfaceCommand = 0x16;
-	public static final int ResponseInvalidInterfaceProperty = 0x18;
-	public static final int ResponseInterfacePropertyReadOnly = 0x1A;
-	public static final int ResponseInterfacePropertyWriteOnly = 0x1C;
-	public static final int ResponseInvalidInterfacePropertyValue = 0x1E;
-	public static final int ResponseTryAgainLater = 0x20;
+	public static final int ResponseDeviceError = 0x01;
+	public static final int ResponseUnknownClient = 0x02;
+	public static final int ResponseUnsupportedMessage = 0x03;
+	public static final int ResponsePayloadTooLarge = 0x04;
+	public static final int ResponseInvalidPayload = 0x05;
+	public static final int ResponseEndOfPacketNotFound = 0x06;
+	public static final int ResponseWrongPassword = 0x07;
+	public static final int ResponseNameReadOnly = 0x08;
+	public static final int ResponsePasswordReadOnly = 0x09;
+	public static final int ResponseCannotChangeNameNow = 0x0A;
+	public static final int ResponseCannotChangePasswordNow = 0x0B;
+	public static final int ResponseInvalidInterface = 0x0C;
+	public static final int ResponseInvalidInterfaceCommand = 0x0D;
+	public static final int ResponseInvalidInterfaceProperty = 0x0E;
+	public static final int ResponseInterfacePropertyReadOnly = 0x0F;
+	public static final int ResponseInterfacePropertyWriteOnly = 0x10;
+	public static final int ResponseInvalidInterfacePropertyValue = 0x11;
+	public static final int ResponseTryAgainLater = 0x12;
 
 	static final byte StartOfPacket = 0x55;
-	static final byte Escape = 0x1B;
 	static final byte EndOfPacket = 0x33;
-	private static final int ResponseHeaderLength = 7;
+	private static final int ResponseHeaderLength = 8;
 	private static final int RequestHeaderLength = 8;
 	private static final int EndOfPacketLength = 1;
-	private static final int StateMask = 0x0F;
-	private static final int FlagEscape = 0x10;
 
-	// this class used to be immutable, but after running several tests,
+	// This class used to be immutable, but after running several tests,
 	// caching and reusing proved to save A LOT of GC work, during periods
 	// when tens of messages are being sent per second
-	int clientId, sequenceNumber, responseCode, payloadLength;
+	int messageType, clientId, sequenceNumber, responseCode, payloadLength;
 	byte[] payload;
 	IoTDevice device;
-	int interfaceIndex, commandOrPropertyIndex;
 	byte[] password;
 
-	@IoTClient.SecondaryThread
+	@SecondaryThread
 	private IoTMessage() {
 	}
 
-	@IoTClient.SecondaryThread
+	@SecondaryThread
 	static byte[] allocateMaximumResponseBuffer_() {
-		return new byte[ResponseHeaderLength + MaxPayloadLengthEscaped + EndOfPacketLength];
+		return new byte[ResponseHeaderLength + MaxPayloadLength + EndOfPacketLength];
 	}
 
-	@IoTClient.SecondaryThread
+	@SecondaryThread
 	static byte[] allocateMaximumRequestBuffer_() {
-		return new byte[RequestHeaderLength + MaxPasswordLengthEscaped + MaxPayloadLengthEscaped + EndOfPacketLength];
+		return new byte[RequestHeaderLength + MaxPasswordLength + MaxPayloadLength + EndOfPacketLength];
 	}
 
 	private static long deserializeLong(byte[] payload, int srcOffset) {
@@ -248,9 +194,9 @@ public final class IoTMessage {
 			((long)((payload[srcOffset + 4] & 0xFF) | ((payload[srcOffset + 5] & 0xFF) << 8) | ((payload[srcOffset + 6] & 0xFF) << 16) | (payload[srcOffset + 7] << 24)) << 32);
 	}
 
-	@IoTClient.SecondaryThread
+	@SecondaryThread
 	IoTDevice parseQueryDevice_(IoTClient client, SocketAddress socketAddress) {
-		if (clientId != IoTMessage.ClientIdQueryDevice ||
+		if (clientId != IoTMessage.InvalidClientId ||
 			responseCode != IoTMessage.ResponseOK ||
 			payloadLength < (1 + 16 + 16 + 1 + 1))
 			return null;
@@ -268,19 +214,19 @@ public final class IoTMessage {
 		final int interfaceCount = (payload[srcOffset++] & 0xFF);
 		if (interfaceCount <= 0 || interfaceCount > 128)
 			return null;
-		srcOffset += interfaceCount; // skip all interfaces for now
+		srcOffset += interfaceCount; // Skip all interfaces for now
 
 		final int nameLen = (payload[srcOffset++] & 0xFF);
-		if (nameLen == 0 || (nameLen + srcOffset) > payloadLength)
+		if ((nameLen + srcOffset) > payloadLength)
 			return null;
-		final String name = new String(payload, srcOffset, nameLen);
+		final String name = ((nameLen == 0) ? "IoT" : new String(payload, srcOffset, nameLen));
 
 		return new IoTDevice(client, socketAddress, flags, new UUID(mostSigBitsCategory, leastSigBitsCategory), new UUID(mostSigBits, leastSigBits), name, new IoTInterface[interfaceCount]);
 	}
 
-	@IoTClient.SecondaryThread
+	@SecondaryThread
 	IoTInterface parseDescribeInterface_(IoTDevice device) {
-		if (clientId != IoTMessage.ClientIdDescribeInterface ||
+		if (clientId != IoTMessage.InvalidClientId ||
 			responseCode != IoTMessage.ResponseOK)
 			return null;
 
@@ -336,15 +282,13 @@ public final class IoTMessage {
 		return null;
 	}
 
-	@IoTClient.SecondaryThread
+	@SecondaryThread
 	int parseHandshake_() {
-		if (clientId != IoTMessage.ClientIdHandshake ||
+		if (clientId != IoTMessage.InvalidClientId ||
 			responseCode != IoTMessage.ResponseOK ||
 			payloadLength != 1)
-			return IoTMessage.InitialInvalidClientId;
+			return IoTMessage.InvalidClientId;
 
-		final int clientId = (payload[0] & 0xFF);
-
-		return (((clientId & 1) != 0) ? -1 : clientId);
+		return payload[0] & 0xFF;
 	}
 }
